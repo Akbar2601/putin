@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Flappy Bee 🌸</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #000;
+      --primary: #f0c000;
+      --text-light: #fff;
+      --text-dark: #222;
+      --error-red: #e22;
+      --font-family: 'Montserrat', sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin:0; padding:0; }
+    html, body { width:100%; height:100%; overflow:hidden; background:var(--bg-color); font-family:var(--font-family); }
+    body { display:flex; flex-direction:column; }
+
+    /* Header */
+    #header {
+      display:flex; align-items:center; justify-content:center;
+      padding:16px; position:relative; z-index:20;
+    }
+    #logo-text {
+      color: var(--text-light);
+      font-size:2rem; font-weight:700; margin-right:8px;
+    }
+    .hexagon {
+      width:48px; height:48px;
+      background: var(--primary);
+      clip-path: polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%);
+      display:flex; align-items:center; justify-content:center;
+      color: var(--text-dark); font-weight:700; font-size:1.25rem;
+    }
+    #score {
+      position:absolute; right:16px; top:50%; transform:translateY(-50%);
+      color: var(--text-light);
+      font-size:1.5rem; font-weight:700;
+      text-shadow:1px 1px 4px rgba(0,0,0,0.7);
+    }
+
+    /* Game area */
+    #game-container { flex:1; position:relative; }
+    canvas {
+      width:100%; height:100%;
+      background: var(--bg-color);
+      display:block;
+      touch-action: none;
+    }
+
+    /* UI Overlay */
+    #ui-overlay {
+      position:absolute; top:0; left:0;
+      width:100%; height:100%;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      pointer-events: none; /* пропускаем все клики к канвасу */
+      z-index:30;
+    }
+    /* Но само сообщение и кнопка – кликабельны */
+    #ui-overlay > * { pointer-events: auto; }
+
+    #gameOver {
+      color: var(--error-red);
+      font-size:2rem; font-weight:700;
+      text-shadow:1px 1px 4px rgba(0,0,0,0.7);
+      display:none; margin-bottom:16px;
+    }
+    #restartBtn {
+      padding:12px 24px; font-size:1rem; font-weight:700;
+      background: var(--primary); color: var(--text-dark);
+      border:none; border-radius:999px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.4);
+      cursor:pointer; display:none;
+      transition:transform .2s, background .3s;
+    }
+    #restartBtn:hover {
+      background:#d1b000;
+      transform:scale(1.05);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="header">
+    <div id="logo-text">PUT</div>
+    <div class="hexagon">IN</div>
+    <div id="score">0</div>
+  </div>
+
+  <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui-overlay">
+      <div id="gameOver">💀 Вы проиграли!</div>
+      <button id="restartBtn" onclick="restartGame()">🔁 Попробовать снова</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas     = document.getElementById('gameCanvas'),
+          ctx        = canvas.getContext('2d'),
+          gameOverEl = document.getElementById('gameOver'),
+          restartBtn = document.getElementById('restartBtn'),
+          scoreEl    = document.getElementById('score');
+
+    function resizeCanvas(){
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight - document.getElementById('header').offsetHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    let gravity     = 0.6,
+        jump        = -7,
+        flowerSpeed = 2,
+        score       = 0,
+        gameOver    = false,
+        lastFlowerY = canvas.height/2,
+        holdInterval= null,
+        loaded      = 0,
+        popups      = [];
+
+    const flowerSize  = 60,
+          scoringZone = 40,
+          H_SPACING   = 300;
+
+    const beeImg    = new Image(); beeImg.src    = 'bee.png';
+    const flowerImg = new Image(); flowerImg.src = 'flower.png';
+
+    let bee = { x: canvas.width*0.2, y: canvas.height/2, radius:25, dy:0 },
+        flower = null;
+
+    function spawnPopup(x,y,text){
+      popups.push({ x,y,alpha:1,text });
+    }
+    function drawPopups(){
+      popups.forEach((p,i)=>{
+        ctx.save();
+        ctx.globalAlpha = p.alpha;
+        ctx.fillStyle   = '#ff0044';
+        ctx.font        = 'bold 24px sans-serif';
+        ctx.fillText(p.text, p.x-12, p.y);
+        ctx.restore();
+        p.y    -= 1.5;
+        p.alpha-= 0.02;
+        if(p.alpha<=0) popups.splice(i,1);
+      });
+    }
+
+    [beeImg, flowerImg].forEach(img=>{
+      img.onload = ()=>{ if(++loaded===2) resetGame(); };
+    });
+
+    function resetGame(){
+      bee.y        = canvas.height/2; bee.dy=0;
+      score        = 0; gameOver=false;
+      lastFlowerY  = canvas.height/2;
+      gravity      = 0.6; flowerSpeed=2;
+      spawnFlower(canvas.width+H_SPACING);
+      scoreEl.textContent = 0;
+      gameOverEl.style.display   = 'none';
+      restartBtn.style.display   = 'none';
+      requestAnimationFrame(update);
+    }
+
+    function spawnFlower(x){
+      let newY = lastFlowerY + (Math.random()*200 - 100);
+      const minY=50, maxY=canvas.height-flowerSize-50;
+      newY = Math.max(minY, Math.min(maxY, newY));
+      flower = { x, y:newY, scored:false };
+      lastFlowerY = newY;
+    }
+
+    function update(){
+      if(gameOver) return;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      bee.dy += gravity;
+      bee.y  += bee.dy;
+      if(bee.y+bee.radius>canvas.height){ bee.y=canvas.height-bee.radius; bee.dy=0; }
+      if(bee.y-bee.radius<0){ bee.y=bee.radius; bee.dy=0; }
+
+      if(flower){
+        flower.x -= flowerSpeed;
+        const cx = flower.x+flowerSize/2,
+              cy = flower.y+flowerSize/2,
+              dx = bee.x-cx, dy = bee.y-cy,
+              dist = Math.hypot(dx,dy);
+
+        if(!flower.scored && dist<scoringZone){
+          flower.scored=true;
+          scoreEl.textContent = ++score;
+          spawnPopup(bee.x,bee.y,'+1');
+          flowerSpeed = Math.min(flowerSpeed+0.2,5);
+          gravity     = Math.min(gravity+0.01,1);
+          spawnFlower(canvas.width+H_SPACING);
+        }
+        if(!flower.scored && flower.x+flowerSize<bee.x-bee.radius){
+          endGame('Пропущен цветок!');
+        }
+        ctx.drawImage(flowerImg,flower.x,flower.y,flowerSize,flowerSize);
+      }
+
+      drawPopups();
+      ctx.drawImage(beeImg,bee.x-bee.radius,bee.y-bee.radius,bee.radius*2,bee.radius*2);
+      requestAnimationFrame(update);
+    }
+
+    function jumpBee(){ if(!gameOver) bee.dy=jump; }
+
+    // Мобильный авто-прыжок на canvas
+    canvas.addEventListener('touchstart', e=>{
+      e.preventDefault();
+      if(!holdInterval){
+        jumpBee();
+        holdInterval = setInterval(jumpBee,200);
+      }
+    },{passive:false});
+    canvas.addEventListener('touchend', e=>{
+      e.preventDefault();
+      clearInterval(holdInterval);
+      holdInterval = null;
+    });
+
+    // ПК
+    window.addEventListener('mousedown', ()=>{
+      if(!holdInterval){
+        jumpBee();
+        holdInterval = setInterval(jumpBee,200);
+      }
+    });
+    window.addEventListener('mouseup', ()=>{
+      clearInterval(holdInterval);
+      holdInterval = null;
+    });
+    window.addEventListener('mouseleave', ()=>{
+      clearInterval(holdInterval);
+      holdInterval = null;
+    });
+
+    function endGame(reason){
+      gameOver=true;
+      clearInterval(holdInterval); holdInterval=null;
+      gameOverEl.textContent   = reason;
+      gameOverEl.style.display = 'block';
+      restartBtn.style.display = 'block';
+    }
+
+    function restartGame(){
+      resizeCanvas();
+      bee.x = canvas.width*0.2;
+      resetGame();
+    }
+  </script>
+
+</body>
+</html>
